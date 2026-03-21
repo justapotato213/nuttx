@@ -1010,7 +1010,7 @@ static void lr1121_spi_unlock(FAR struct lr1121_dev_s *dev)
     SPI_LOCK(dev->spi, false);
 }
 
-static void lr1121_command(FAR struct lr1121_dev_s *dev, uint8_t cmd,
+static void lr1121_command(FAR struct lr1121_dev_s *dev, uint16_t cmd,
                            const FAR uint8_t *params, size_t paramslen,
                            FAR uint8_t *returns)
 {
