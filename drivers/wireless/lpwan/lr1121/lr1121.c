@@ -42,6 +42,7 @@
 #include <unistd.h>
 #include <nuttx/wireless/lpwan/lr1121.h>
 #include <nuttx/wqueue.h>
+#include <sys/types.h>
 
 /****************************************************************************
  * Private prototypes for file operations
@@ -75,7 +76,7 @@ struct lr1121_dev_s
     mutex_t lock; /* Only let one user in at a time */
     sem_t rx_sem;
     sem_t tx_sem;
-    uint16_t irqbits;
+    uint32_t irqbits;
 
     /* Hardware settings */
 
@@ -107,10 +108,10 @@ struct lr1121_dev_s
 
 enum lr1121_cmd_status
 {
-    LR1121_STATUS_RESERVED,
-    LR1121_STATUS_RFU,
-    LR1121_STATUS_DATA_AVAILABLE,
-    LR1121_STATUS_TIMEOUT,
+    LR1121_STATUS_FAIL,
+    LR1121_STATUS_PERR,
+    LR1121_STATUS_OK,
+    LR1121_STATUS_DAT,
     LR1121_STATUS_ERROR,
     LR1121_STATUS_EXECUTE_FAIL,
     LR1121_STATUS_TX_DONE
@@ -119,18 +120,30 @@ enum lr1121_cmd_status
 enum lr1121_chip_mode
 {
     LR1121_MODE_UNUSED,
-    LR1121_MODE_RFU,
     LR1121_MODE_STBY_RC,
     LR1121_MODE_STBY_XOSC,
     LR1121_MODE_FS,
     LR1121_MODE_RX,
-    LR1121_MODE_TX
+    LR1121_MODE_TX,
+    LR1121_MODE_RFU,
+};
+
+enum lr1121_cmd_rst_status
+{
+    LR1121_RST_STATUS_CLEARED,
+    LR1121_RST_STATUS_ANALOG_RESET,
+    LR1121_RST_STATUS_EXT_RESET,
+    LR1121_RST_STATUS_SYSTEM,
+    LR1121_RST_STATUS_WATCHDOG,
+    LR1121_RST_STATUS_WAKEUP_NSS,
+    LR1121_RST_STATUS_RTC,
 };
 
 struct lr1121_status_s
 {
     enum lr1121_cmd_status cmd;
     enum lr1121_chip_mode mode;
+    enum lr1121_cmd_rst_status reset_status;
 };
 
 static const struct file_operations lr1121_ops =
@@ -157,7 +170,7 @@ FAR struct lr1121_dev_s g_lr1121_devices[LR1121_MAX_DEVICES];
 /* SPI and control **********************************************************/
 
 static void lr1121_command(FAR struct lr1121_dev_s *dev,
-                           uint8_t cmd,
+                           uint16_t cmd,
                            FAR const uint8_t *params,
                            size_t paramslen,
                            FAR uint8_t *returns);
@@ -193,10 +206,10 @@ static void lr1121_set_tx_continuous_wave(FAR struct lr1121_dev_s *dev);
 static void lr1121_set_regulator_mode(FAR struct lr1121_dev_s *dev,
                                       enum lr1121_regulator_mode_e mode);
 
-static void lr1121_set_pa_config(FAR struct lr1121_dev_s *dev,
-                                 enum lr1121_device_e model,
-                                 uint8_t hpmax,
-                                 uint8_t padutycycle);
+static void lr1121_set_pa_config(FAR struct lr1121_dev_s *dev, uint8_t duty_cycle,
+                                 enum lr1121_pa_sel_e pa_sel,
+                                 enum lr1121_pa_reg_supply_e reg_supply,
+                                 uint8_t hp_sel);
 
 static void lr1121_set_tx_infinite_preamble(FAR struct lr1121_dev_s *dev);
 
@@ -208,7 +221,7 @@ static void lr1121_set_dio_irq_params(FAR struct lr1121_dev_s *dev,
                                       uint16_t dio2_mask,
                                       uint16_t dio3_mask);
 
-static void lr1121_set_dio2_as_rf_switch(FAR struct lr1121_dev_s *dev,
+static void lr1121_set_dio_as_rf_switch(FAR struct lr1121_dev_s *dev,
                                          bool enable);
 
 static void lr1121_set_dio3_as_tcxo(FAR struct lr1121_dev_s *dev,
@@ -216,10 +229,10 @@ static void lr1121_set_dio3_as_tcxo(FAR struct lr1121_dev_s *dev,
                                     uint32_t delay);
 
 static void lr1121_get_irq_status(FAR struct lr1121_dev_s *dev,
-                                  FAR uint16_t *irqstatus);
+                                  FAR uint32_t *irqstatus);
 
 static void lr1121_clear_irq_status(FAR struct lr1121_dev_s *dev,
-                                    uint16_t clearbits);
+                                    uint32_t clearbits);
 
 /* RF Modulation and Packet-Related Functions *******************************/
 
@@ -703,22 +716,22 @@ static void lr1121_set_regulator_mode(FAR struct lr1121_dev_s *dev,
                    LR1121_SETREGULATORMODE_PARAMS, NULL);
 }
 
-/* Caution! Exceeding the limits listed in DS_SX1261/2 V2.1
- * 13.1.14.1 may cause irreversible damage to the device
+/* Read data sheet before setting dutyCycle and hp_sel. (Section 9 and table 9-5)
  */
 
-static void lr1121_set_pa_config(FAR struct lr1121_dev_s *dev,
-                                 enum lr1121_device_e model, uint8_t hpmax,
-                                 uint8_t padutycycle)
+static void lr1121_set_pa_config(FAR struct lr1121_dev_s *dev, uint8_t duty_cycle,
+                                 enum lr1121_pa_sel_e pa_sel,
+                                 enum lr1121_pa_reg_supply_e reg_supply,
+                                 uint8_t hp_sel)
 {
     uint8_t params[LR1121_SETPACONFIG_PARMS];
 
     memset(params, 0, LR1121_SETPACONFIG_PARMS);
 
-    params[LR1121_SETPACONFIG_PADUTYCYCLE_PARAM] = padutycycle;
-    params[LR1121_SETPACONFIG_HPMAX_PARAM] = hpmax;
-    params[LR1121_SETPACONFIG_DEVICESEL_PARAM] = model;
-    params[LR1121_SETPACONFIG_PALUT_PARAM] = 0x01;
+    params[LR1121_SETPACONFIG_PASEL] = pa_sel;
+    params[LR1121_SETPACONFIG_REGPASEL] = reg_supply;
+    params[LR1121_SETPACONFIG_PADUTYCYCLE_PARAM] = duty_cycle;
+    params[LR1121_SETPACONFIG_PAHPSEL] = hp_sel;
 
     lr1121_command(dev, LR1121_SETPACONFIG, params, LR1121_SETPACONFIG_PARMS,
                    NULL);
@@ -740,37 +753,40 @@ static void lr1121_set_rx_tx_fallback_mode(FAR struct lr1121_dev_s *dev,
 /* DIO and IRQ control functions */
 
 static void lr1121_set_dio_irq_params(FAR struct lr1121_dev_s *dev,
-                                      uint16_t irq_mask, uint16_t dio1_mask,
-                                      uint16_t dio2_mask, uint16_t dio3_mask)
+                                      uint32_t irq1_mask, uint32_t irq2_mask)
 {
-    irq_mask = htobe16(irq_mask);
-    dio1_mask = htobe16(dio1_mask);
-    dio2_mask = htobe16(dio2_mask);
-    dio3_mask = htobe16(dio3_mask);
+    irq1_mask = htobe32(irq1_mask);
+    irq2_mask = htobe32(irq2_mask);
 
     uint8_t params[LR1121_SETDIOIRQPARAMS_PARAMS];
 
-    memcpy(params + LR1121_SETDIOIRQPARAMS_IRQMASK_PARAM, &irq_mask,
-           LR1121_SETDIOIRQPARAMS_IRQMASK_PARAMS);
+    memcpy(params + LR1121_SETDIOIRQPARAMS_IRQ1TOENABLE_PARAM, &irq1_mask,
+           LR1121_SETDIOIRQPARAMS_IRQ1TOENABLE_PARAMS);
 
-    memcpy(params + LR1121_SETDIOIRQPARAMS_DIO1MASK_PARAM, &dio1_mask,
-           LR1121_SETDIOIRQPARAMS_DIO1MASK_PARAMS);
-
-    memcpy(params + LR1121_SETDIOIRQPARAMS_DIO2MASK_PARAM, &dio2_mask,
-           LR1121_SETDIOIRQPARAMS_DIO2MASK_PARAMS);
-
-    memcpy(params + LR1121_SETDIOIRQPARAMS_DIO3MASK_PARAM, &dio3_mask,
-           LR1121_SETDIOIRQPARAMS_DIO3MASK_PARAMS);
+    memcpy(params + LR1121_SETDIOIRQPARAMS_IRQ2TOENABLE_PARAM, &irq2_mask,
+           LR1121_SETDIOIRQPARAMS_IRQ2TOENABLE_PARAMS);
 
     lr1121_command(dev, LR1121_SETDIOIRQPARAMS, params,
                    LR1121_SETDIOIRQPARAMS_PARAMS, NULL);
 }
 
-static void lr1121_set_dio2_as_rf_switch(FAR struct lr1121_dev_s *dev,
-                                         bool enable)
+static void lr1121_set_dio_as_rf_switch(FAR struct lr1121_dev_s *dev,
+                                         uint8_t enable, uint8_t standby, uint8_t rx, 
+                                         uint8_t tx, uint8_t txhp, uint8_t txhf)
 {
-    lr1121_command(dev, LR1121_SETDIO2RFSWCTRL, (uint8_t *)&enable,
-                   LR1121_SETDIO2RFSWCTRL_PARAMS, NULL);
+    uint8_t params[LR1121_SETDIORFSWCTRL_PARAMS];
+
+    params[LR1121_SETDIORFSWCTRL_ENABLE_PARAM] = enable;
+    params[LR1121_SETDIORFSWCTRL_STDBY_CFG_PARAM] = standby;
+    params[LR1121_SETDIORFSWCTRL_RX_CFG_PARAM] = rx;
+    params[LR1121_SETDIORFSWCTRL_TX_CFG_PARAM] = tx;
+    params[LR1121_SETDIORFSWCTRL_TXHPCFG_PARAM] = txhp;
+    params[LR1121_SETDIORFSWCTRL_TXHFCFG_PARAM] = txhf;
+    params[6] = 0; /* Reserved */
+    params[7] = 0; /* Reserved */
+
+    lr1121_command(dev, LR1121_SETDIORFSWCTRL, params,
+                   LR1121_SETDIORFSWCTRL_PARAMS, NULL);
 }
 
 static void lr1121_set_dio3_as_tcxo(FAR struct lr1121_dev_s *dev,
@@ -792,27 +808,22 @@ static void lr1121_set_dio3_as_tcxo(FAR struct lr1121_dev_s *dev,
 }
 
 static void lr1121_get_irq_status(FAR struct lr1121_dev_s *dev,
-                                  FAR uint16_t *irqstatus)
+                                  FAR uint32_t *irqstatus)
 {
-    uint8_t returns[LR1121_GETIRQSTATUS_RETURNS];
-
-    lr1121_command(dev, LR1121_GETIRQSTATUS,
-                   NULL, LR1121_GETIRQSTATUS_RETURNS,
-                   returns);
-
-    uint16_t bits;
+    lr1121_get_status(dev, NULL);
+    uint32_t bits;
     memcpy(&bits, returns + LR1121_GETIRQSTATUS_IRQSTATUS_RETURN,
            LR1121_GETIRQSTATUS_IRQSTATUS_RETURNS);
 
-    *irqstatus = be16toh(bits);
+    *irqstatus = be32toh(bits);
 }
 
 static void lr1121_clear_irq_status(FAR struct lr1121_dev_s *dev,
-                                    uint16_t clearbits)
+                                    uint32_t clearbits)
 {
     uint8_t params[LR1121_CLEARIRQSTATUS_PARAMS];
 
-    clearbits = htobe16(clearbits);
+    clearbits = htobe32(clearbits);
     memcpy(params + LR1121_CLEARIRQSTATUS_CLEAR_PARAM,
            &clearbits,
            LR1121_CLEARIRQSTATUS_CLEAR_PARAMS);
@@ -908,8 +919,7 @@ static void lr1121_set_packet_type(FAR struct lr1121_dev_s *dev,
 static void lr1121_set_rf_frequency(FAR struct lr1121_dev_s *dev,
                                     uint32_t frequency_hz)
 {
-    uint32_t corrected_freq =
-        lr1121_convert_freq_in_hz_to_pll_step(frequency_hz);
+    uint32_t corrected_freq = frequency_hz;
 
     corrected_freq = htobe32(corrected_freq);
 
@@ -929,20 +939,39 @@ static void lr1121_set_lora_symb_num_timout(FAR struct lr1121_dev_s *dev,
 static void lr1121_get_status(FAR struct lr1121_dev_s *dev,
                               FAR struct lr1121_status_s *status)
 {
-    /* NOP param to shift out result */
+    lr1121_select(dev);
 
-    uint8_t parms[1] = {
-        0x00};
+    uint8_t returns[6];
 
-    uint8_t rets[1];
+    uint8_t high = LR1121_CMD_GETSTATUS >> 8;
+    uint8_t low = LR1121_CMD_GETSTATUS & 0xFF;
 
-    /* Get, mask and shift result into readable mode numbers */
+    returns[0] = SPI_SEND(dev->spi, high);
+    returns[1] = SPI_SEND(dev->spi, low);
 
-    lr1121_command(dev, LR1121_CMD_GETSTATUS, parms, sizeof(parms), rets);
-    status->mode = (rets[0] & LR1121_STATUS_CHIPMODE_MASK) >>
-                   LR1121_STATUS_CHIPMODE_SHIFT;
-    status->cmd = (rets[0] & LR1121_STATUS_CMD_MASK) >>
-                  LR1121_STATUS_CMD_SHIFT;
+    /* Send all the params and record the returning bytes */
+
+    for (uint8_t i = 0; i < 4; i++)
+    {
+        uint8_t param = LR1121_NOP;
+
+        uint8_t ret = SPI_SEND(dev->spi, param);
+
+        if (returns != NULL)
+        {
+            returns[i + 2] = ret;
+        }
+    }
+
+    status->cmd = returns[0] & (LR1121_STATUS_CMD_MASK);
+    status->mode = returns[1] & (LR1121_STATUS_CHIPMODE_MASK);
+    status->reset_status = returns[1] & (LR1121_STATUS_RST_MASK);
+
+    uint32_t irq_status = 0;
+    memcpy(&irq_status, returns + 2, sizeof(irq_status));
+    dev->irqbits = be32toh(irq_status);
+
+    lr1121_deselect(dev);
 }
 
 static void lr1121_get_rssi_inst(FAR struct lr1121_dev_s *dev,
@@ -1016,11 +1045,11 @@ static void lr1121_command(FAR struct lr1121_dev_s *dev, uint16_t cmd,
 {
     lr1121_select(dev);
 
-    /* First send the command. This does not return anything.
-     * "RFU" according the manual
-     */
+    uint8_t high = cmd >> 8;
+    uint8_t low = cmd & 0xFF;
 
-    SPI_SEND(dev->spi, cmd);
+    SPI_SEND(dev->spi, high);
+    SPI_SEND(dev->spi, low);
 
     /* Send all the params and record the returning bytes */
 
@@ -1102,10 +1131,6 @@ static void lr1121_write_buffer(FAR struct lr1121_dev_s *dev,
 
     SPI_SEND(dev->spi, LR1121_WRITEBUFFER);
 
-    /* Offset */
-
-    SPI_SEND(dev->spi, offset);
-
     /* Data */
 
     for (size_t i = 0; i < len; i++)
@@ -1125,7 +1150,11 @@ static void lr1121_read_buffer(FAR struct lr1121_dev_s *dev,
 
     /* Command */
 
-    SPI_SEND(dev->spi, LR1121_READBUFFER);
+    uint8_t high = LR1121_READBUFFER >> 8;
+    uint8_t low = LR1121_READBUFFER & 0xFF;
+
+    SPI_SEND(dev->spi, high);
+    SPI_SEND(dev->spi, low);
 
     /* Offset */
 
@@ -1206,7 +1235,7 @@ static int lr1121_setup_radio(FAR struct lr1121_dev_s *dev)
 {
     /* Clear IRQ status */
 
-    lr1121_clear_irq_status(dev, 0xffff);
+    lr1121_clear_irq_status(dev, 0xffffffff);
 
     /* Set regulator */
 
@@ -1230,20 +1259,17 @@ static int lr1121_setup_radio(FAR struct lr1121_dev_s *dev)
 
     /* Set PA settings from lower */
 
-    uint8_t hp;
-    uint8_t dc;
-    enum lr1121_device_e model;
-    dev->lower->get_pa_values(&model, &hp, &dc);
-    lr1121_set_pa_config(dev, model, hp, dc);
+    uint8_t duty_cycle;
+    enum lr1121_pa_sel_e pa_sel;
+    enum lr1121_pa_reg_supply_e reg_supply;
+    uint8_t hp_sel;
+    dev->lower->get_pa_values(&duty_cycle, &pa_sel, &reg_supply, &hp_sel);
+    lr1121_set_pa_config(dev, duty_cycle, pa_sel, reg_supply, hp_sel);
 
     /* Set TX params */
 
     dev->lower->limit_tx_power(&dev->power); /* Limited by board */
     lr1121_set_tx_params(dev, dev->power, dev->lower->tx_ramp_time);
-
-    /* Set base */
-
-    lr1121_set_buffer_base_address(dev, 0, 0);
 
     /* Set params depending on packet type */
 
@@ -1291,7 +1317,7 @@ static int lr1121_setup_radio(FAR struct lr1121_dev_s *dev)
 
     /* DIO 2 */
 
-    lr1121_set_dio2_as_rf_switch(dev, dev->lower->use_dio2_as_rf_sw);
+    lr1121_set_dio_as_rf_switch(dev, dev->lower->use_dio2_as_rf_sw);
 
     /* DIO 3 */
 
@@ -1330,9 +1356,10 @@ static void lr1121_isr0_process(FAR void *arg)
     wlinfo("Lr1121 ISR0 process triggered");
 
     /* Get and clear IRQ bits */
+    struct lr1121_status_s status;
 
     lr1121_spi_lock(dev);
-    lr1121_get_irq_status(dev, &dev->irqbits);
+    lr1121_get_status(dev, &status);
     lr1121_spi_unlock(dev);
 
     wlinfo("IRQ status 0x%X", dev->irqbits);
