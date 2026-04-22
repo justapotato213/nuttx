@@ -279,9 +279,12 @@
 #define SX126X_FIRST        (SX127X_FIRST + SX127X_NCMDS)
 #define SX126X_NCMDS        11
 
+#define LR1121_FIRST      (SX126X_FIRST + SX126X_NCMDS)
+#define LR1121_NCMDS        11
+
 /* See include/nuttx/wireless/gs2200m.h */
 
-#define GS2200M_FIRST       (SX126X_FIRST + SX126X_NCMDS)
+#define GS2200M_FIRST       (LR1121_FIRST + LR1121_NCMDS)
 #define GS2200M_NCMDS       9
 
 /* See include/nuttx/wireless/cc1101.h */

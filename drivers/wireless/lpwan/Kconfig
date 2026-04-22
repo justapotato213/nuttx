@@ -30,4 +30,11 @@ config LPWAN_SX127X
 
 source "drivers/wireless/lpwan/sx127x/Kconfig"
 
+config LPWAN_LR1121
+	bool "LR1121 driver supprt"
+	default n
+	depends on SPI
+	---help---
+		Enable driver support for the LR1121 LoRa radio transceiver. 
+
 endif # DRIVERS_LPWAN

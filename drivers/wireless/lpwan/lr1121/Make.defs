@@ -1,5 +1,5 @@
 ############################################################################
-# drivers/wireless/lpwan/Make.defs
+# drivers/wireless/lpwan/lr1121/Make.defs
 #
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -20,13 +20,12 @@
 #
 ############################################################################
 
-# Include nothing if LPWAN is disabled
+ifeq ($(CONFIG_LPWAN_LR1121),y)
 
-ifeq ($(CONFIG_DRIVERS_LPWAN),y)
+CSRCS += lr1121.c
 
-include wireless/lpwan/sx127x/Make.defs
-include wireless/lpwan/sx126x/Make.defs
-include wireless/lpwan/rn2xx3/Make.defs
-include wireless/lpwan/lr1121/Make.defs
+DEPPATH += --dep-path wireless$(DELIM)lpwan$(DELIM)lr1121
+VPATH += :wireless$(DELIM)lpwan$(DELIM)lr1121
+CFLAGS += ${INCDIR_PREFIX}$(TOPDIR)$(DELIM)drivers$(DELIM)wireless$(DELIM)lpwan$(DELIM)lr1121
 
-endif # CONFIG_DRIVERS_LPWAN
+endif # CONFIG_LPWAN_LR1121
