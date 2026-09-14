@@ -58,5 +58,6 @@ config LPWAN_LR1121
 	depends on SPI
 	---help---
 		Enable driver support for the LR1121 LoRa radio transceiver. 
-source "drivers/wireless/lpwan/
+source "drivers/wireless/lpwan/"
+
 endif # DRIVERS_LPWAN
