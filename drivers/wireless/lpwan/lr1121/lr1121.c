@@ -222,7 +222,7 @@ static void lr1121_set_dio_irq_params(FAR struct lr1121_dev_s *dev,
                                       uint16_t dio3_mask);
 
 static void lr1121_set_dio_as_rf_switch(FAR struct lr1121_dev_s *dev,
-                                         bool enable);
+                                        bool enable);
 
 static void lr1121_set_dio3_as_tcxo(FAR struct lr1121_dev_s *dev,
                                     enum lr1121_tcxo_voltage_e voltage,
@@ -771,8 +771,8 @@ static void lr1121_set_dio_irq_params(FAR struct lr1121_dev_s *dev,
 }
 
 static void lr1121_set_dio_as_rf_switch(FAR struct lr1121_dev_s *dev,
-                                         uint8_t enable, uint8_t standby, uint8_t rx, 
-                                         uint8_t tx, uint8_t txhp, uint8_t txhf)
+                                        uint8_t enable, uint8_t standby, uint8_t rx,
+                                        uint8_t tx, uint8_t txhp, uint8_t txhf)
 {
     uint8_t params[LR1121_SETDIORFSWCTRL_PARAMS];
 
